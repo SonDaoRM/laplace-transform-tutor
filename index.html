@@ -862,17 +862,16 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 <script>
-/* Site stats: GLOBAL totals shared by all visitors, via the free Abacus
-   counter API (https://abacus.jsn.cam - no API key, CORS-enabled, per-IP
-   rate limit). Visits: one hit per browser session (sessionStorage guard).
+/* Site stats: GLOBAL totals shared by all visitors, via the free Count API
+   (https://countapi.mileshilliard.com - no API key, CORS-enabled).
+   Visits: one hit per browser session (sessionStorage guard).
    Time: 1 tick = 15s of accumulated visitor time; heartbeat flushes while
    visible plus a keepalive flush on hide/close. Display = server ticks x
    15s plus this session's not-yet-sent time. */
 (function(){
-  var API='https://abacus.jasoncameron.dev';
-  var NS='sondaorm.github.io';
-  var VISITS_KEY='laplace-transform-tutor-visits';
-  var TICKS_KEY='laplace-transform-tutor-time-15s';
+  var API='https://countapi.mileshilliard.com/api/v1';
+  var VISITS_KEY='sondaorm-laplace-transform-tutor-visits';
+  var TICKS_KEY='sondaorm-laplace-transform-tutor-time-15s';
   var SESSION_FLAG='gstats_laplace_counted';
   var TICK_S=15;
   var countEl=document.getElementById('visitCount');
@@ -897,8 +896,22 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     timeEl.textContent=fmt(shown);
   }
   function api(path,keepalive){
-    return fetch(API+path, keepalive?{method:'GET',keepalive:true}:{method:'GET'})
-      .then(function(r){ if(!r.ok) throw new Error('http '+r.status); return r.json(); });
+    // Retries with backoff (except keepalive calls during unload).
+    var maxAttempts=keepalive?1:5;
+    return new Promise(function(resolve,reject){
+      var attempt=0;
+      function go(){
+        fetch(API+path, keepalive?{method:'GET',keepalive:true}:{method:'GET'})
+          .then(function(r){ if(!r.ok) throw new Error('http '+r.status); return r.json(); })
+          .then(function(j){ j.value=parseInt(j.value,10)||0; resolve(j); })
+          .catch(function(e){
+            attempt++;
+            if(attempt>=maxAttempts) reject(e);
+            else setTimeout(go,3000*attempt);
+          });
+      }
+      go();
+    });
   }
 
   // Visits: count once per session, always show the current global total.
@@ -907,12 +920,12 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     if(sessionStorage.getItem(SESSION_FLAG)) isNewSession=false;
     else sessionStorage.setItem(SESSION_FLAG,'1');
   }catch(e){ /* no storage: count the visit anyway */ }
-  (isNewSession?api('/hit/'+NS+'/'+VISITS_KEY):api('/get/'+NS+'/'+VISITS_KEY))
+  (isNewSession?api('/hit/'+VISITS_KEY):api('/get/'+VISITS_KEY))
     .then(function(j){ countEl.textContent=String(j.value); })
     .catch(function(){ countEl.textContent='\u2013'; });
 
   // Time: load the global total, then accumulate while visible.
-  api('/get/'+NS+'/'+TICKS_KEY)
+  api('/get/'+TICKS_KEY)
     .then(function(j){ baseTicks=j.value|0; render(); })
     .catch(function(){ /* offline: show this session's time only */ });
 
@@ -923,7 +936,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     sending=true;
     pendingMs=pending(now)-TICK_S*1000;
     visStart=(document.visibilityState!=='hidden')?now:null;
-    api('/hit/'+NS+'/'+TICKS_KEY)
+    api('/hit/'+TICKS_KEY)
       .then(function(j){ baseTicks=j.value|0; sending=false; render(); flush(); })
       .catch(function(){ sending=false; });
   }
@@ -933,7 +946,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     var n=Math.round(pending(Date.now())/(TICK_S*1000));
     pendingMs=0; visStart=null;
     for(var i=0;i<n;i++){
-      api('/hit/'+NS+'/'+TICKS_KEY,true)
+      api('/hit/'+TICKS_KEY,true)
         .then(function(j){ baseTicks=j.value|0; render(); })
         .catch(function(){});
     }
