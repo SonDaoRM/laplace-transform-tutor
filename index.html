@@ -862,27 +862,88 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 <script>
-/* Site stats: per-device visit count (localStorage) + live time-on-site timer. Fully offline. */
+/* Site stats: GLOBAL totals shared by all visitors, via the free Abacus
+   counter API (https://abacus.jsn.cam - no API key, CORS-enabled, per-IP
+   rate limit). Visits: one hit per browser session (sessionStorage guard).
+   Time: 1 tick = 15s of accumulated visitor time; heartbeat flushes while
+   visible plus a keepalive flush on hide/close. Display = server ticks x
+   15s plus this session's not-yet-sent time. */
 (function(){
-  function pad(x){return (x<10?'0':'')+x;}
-  var vc=document.getElementById('visitCount');
+  var API='https://abacus.jasoncameron.dev';
+  var NS='sondaorm.github.io';
+  var VISITS_KEY='laplace-transform-tutor-visits';
+  var TICKS_KEY='laplace-transform-tutor-time-15s';
+  var SESSION_FLAG='gstats_laplace_counted';
+  var TICK_S=15;
+  var countEl=document.getElementById('visitCount');
+  var timeEl=document.getElementById('timeOnSite');
+  var baseTicks=null, pendingMs=0, sending=false;
+  var visStart=(document.visibilityState!=='hidden')?Date.now():null;
+
+  function fmt(sec){
+    sec=Math.floor(sec);
+    if(sec<60) return sec+'s';
+    var m=Math.floor(sec/60), s=sec%60;
+    if(m<60) return m+'m '+s+'s';
+    var h=Math.floor(m/60); m=m%60;
+    if(h<24) return h+'h '+m+'m';
+    var d=Math.floor(h/24); h=h%24;
+    return d+'d '+h+'h';
+  }
+  function pending(now){ return pendingMs+(visStart!==null?now-visStart:0); }
+  function render(){
+    var shown=pending(Date.now())/1000;
+    if(baseTicks!==null) shown+=baseTicks*TICK_S;
+    timeEl.textContent=fmt(shown);
+  }
+  function api(path,keepalive){
+    return fetch(API+path, keepalive?{method:'GET',keepalive:true}:{method:'GET'})
+      .then(function(r){ if(!r.ok) throw new Error('http '+r.status); return r.json(); });
+  }
+
+  // Visits: count once per session, always show the current global total.
+  var isNewSession=true;
   try{
-    var n=parseInt(localStorage.getItem('laplaceTutorVisits')||'0',10);
-    if(isNaN(n)||n<0){n=0;}
-    n+=1;
-    localStorage.setItem('laplaceTutorVisits',String(n));
-    vc.textContent=String(n);
-  }catch(e){
-    vc.textContent='1';
+    if(sessionStorage.getItem(SESSION_FLAG)) isNewSession=false;
+    else sessionStorage.setItem(SESSION_FLAG,'1');
+  }catch(e){ /* no storage: count the visit anyway */ }
+  (isNewSession?api('/hit/'+NS+'/'+VISITS_KEY):api('/get/'+NS+'/'+VISITS_KEY))
+    .then(function(j){ countEl.textContent=String(j.value); })
+    .catch(function(){ countEl.textContent='\u2013'; });
+
+  // Time: load the global total, then accumulate while visible.
+  api('/get/'+NS+'/'+TICKS_KEY)
+    .then(function(j){ baseTicks=j.value|0; render(); })
+    .catch(function(){ /* offline: show this session's time only */ });
+
+  function flush(){
+    if(sending) return;
+    var now=Date.now();
+    if(pending(now)<TICK_S*1000) return;
+    sending=true;
+    pendingMs=pending(now)-TICK_S*1000;
+    visStart=(document.visibilityState!=='hidden')?now:null;
+    api('/hit/'+NS+'/'+TICKS_KEY)
+      .then(function(j){ baseTicks=j.value|0; sending=false; render(); flush(); })
+      .catch(function(){ sending=false; });
   }
-  var t0=Date.now();
-  var ts=document.getElementById('timeOnSite');
-  function tick(){
-    var s=Math.floor((Date.now()-t0)/1000);
-    ts.textContent=pad(Math.floor(s/60))+':'+pad(s%60);
+  setInterval(function(){ render(); flush(); },1000);
+
+  function finalFlush(){
+    var n=Math.round(pending(Date.now())/(TICK_S*1000));
+    pendingMs=0; visStart=null;
+    for(var i=0;i<n;i++){
+      api('/hit/'+NS+'/'+TICKS_KEY,true)
+        .then(function(j){ baseTicks=j.value|0; render(); })
+        .catch(function(){});
+    }
   }
-  tick();
-  setInterval(tick,1000);
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState==='hidden') finalFlush();
+    else if(visStart===null) visStart=Date.now();
+  });
+  window.addEventListener('pagehide',finalFlush);
+  render();
 })();
 </script>
 </body>
